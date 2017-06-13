@@ -155,9 +155,6 @@ class NeuralNetwork:
         # Initialize all parameters
         #               w[layer][output][input]
 
-        for a in range(1, 10):
-            for b in range(1, 10):
-                print "\t", a, " ", b, ": ", self.w_uniform(a, b)
         #Init weights
         #Input
         for o in range(0, self.input_width):
@@ -228,10 +225,12 @@ class NeuralNetwork:
         b = y_in
         assert y_in.shape[0] == x_in.shape[0]
         grad_E = self.w * 0;
+        grad_E_b = self.b * 0;
         (rows, columns) = x_in.shape
 
         #For each input/output in batch
         for itr in range(0, rows):
+            self._delta = self._delta * 0
             x = x_in[itr]
             y = y_in[itr]
             y_hat = self.eval(x)[:self.output_width]
@@ -240,18 +239,22 @@ class NeuralNetwork:
                 if layer == self.n_layer-1:
                     net = self._net_i[layer, :self.output_width]
                     self._delta[layer, :self.output_width] = np.multiply((y_hat - y), self._grad_g_i[layer](net))
-                    temp_grad_E = np.outer(self._delta[layer], self._out_i[layer-1])
+                    temp_grad_E = np.outer( self._out_i[layer-1],self._delta[layer])
+                    temp_grad_E_b = self._delta[layer]
                     grad_E[layer] += temp_grad_E
+                    grad_E_b[layer] += temp_grad_E_b
                 else:
                     #Non output layer
                     net = self._net_i[layer]
                     partly = np.dot(self._delta[layer+1], np.transpose(self.w[layer+1]))
                     temp_delta = np.multiply(partly, self._grad_g_i[layer](net))
                     self._delta[layer] = temp_delta
-                    temp_grad_E = np.outer(self._delta[layer], self._out_i[layer-1])
+                    temp_grad_E = np.outer( self._out_i[layer-1],self._delta[layer])
+                    temp_grad_E_b = self._delta[layer]
                     grad_E[layer] += temp_grad_E
+                    grad_E_b[layer] += temp_grad_E_b
 
-        return grad_E
+        return grad_E, grad_E_b
 
     def train(self,
               x=None,
@@ -267,7 +270,7 @@ class NeuralNetwork:
         assert isinstance(plot, bool)
         assert isinstance(verbose, bool)
 
-        gd = GradientDescent(self.j, self.grad_j, x, y, self.w)
+        gd = GradientDescent(self.j, self.grad_j, self.eval, x, y, self.w, self.b)
 
 
 
@@ -279,7 +282,7 @@ class NeuralNetwork:
 
 if __name__ == '__main__':
     # For debugging purpose with the same seed:
-    np.random.seed(44)
+    #np.random.seed(44)
     plt.ion()
 
     n_samples   = 500
@@ -299,7 +302,7 @@ if __name__ == '__main__':
     for i in xrange(0,len(x)):
         y[i] = func(x[i])
 
-    network = NeuralNetwork(1, 5, 1, 1,
+    network = NeuralNetwork(1, 2, 1, 1,
                             hidden_neuron_type=reluNeuron,
                             output_neuron_type=linearNeuron)
 

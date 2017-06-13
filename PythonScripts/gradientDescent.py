@@ -3,15 +3,17 @@ import numpy as np
 import numpy.random as rand
 import numpy.linalg as linalg
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import matplotlib.cm as cm
 from colorama import Fore, Back, Style
 
 
 class GradientDescent:
     def __init__(self,
-                 j, grad_j,         # Cost function
+                 j, grad_j, eval,        # Cost function
                  x, y,              # Training data
                  theta,             # Cost function parameter
+                 b,
                  parameter=None,    # Optimization Hyperparameter
                  verbose=False,
                  network=None):
@@ -30,7 +32,7 @@ class GradientDescent:
         # - Training stops if performance of training and validation dataset diverge (i.e. early stopping)
         self.j_min = 1e-6
         self.max_epoch = 1000
-        self.early_stopping_epochs = 50
+        self.early_stopping_epochs = 20
 
         # Gradient approximation:
         # - gradient descent,               i.e. nBatch = nTrain
@@ -56,7 +58,8 @@ class GradientDescent:
         # - (Nestorov Momentum) i.e. evaluation of gradient @ w = w + v
         self.momentum = self.zero_momentum
         self.momentum_rho = 0.90  # Default Value = 0.9
-        self.momentum_v = []
+        self.momentum_v = theta * 0
+        self.momentum_v_b = b * 0
 
         # Verification and unpacking of the input:
 
@@ -66,13 +69,19 @@ class GradientDescent:
 
         self.j       = j
         self.grad_j  = grad_j
+        self.eval    = eval
 
         # Training Data and cost function parameter:
+        self._dataIn = x
+        self._dataLabel = y
         assert x.shape[0] == y.shape[0]
-
-        self._training_x = x     # Contains the x data used for training
-        self._training_y = y     # Contains the y data used for training
+        #shuffle dataset!
+        shuffle_vec = np.arange(x.shape[0])
+        np.random.shuffle(shuffle_vec)
+        self._training_x = x[shuffle_vec]     # Contains the x data used for training
+        self._training_y = y[shuffle_vec]     # Contains the y data used for training
         self._theta      = theta # Contains the optimizable parameter of the function
+        self._b          =b
 
         # Optimization Hyperparameters:
         if parameter is not None:
@@ -123,13 +132,20 @@ class GradientDescent:
         self._idx_test = []     # Contains the index of samples used for testing
         self._idx_val = []      # Contains the index of samples used for validation
 
-        self._j_train = np.zeros(50)
-        self._j_test = np.zeros(50)
-        self._j_val = np.zeros(50)
+        self._j_train = np.zeros(self.early_stopping_epochs)
+        self._j_test = np.zeros(self.early_stopping_epochs)
+        self._j_val = np.zeros(self.early_stopping_epochs)
 
-        self._fig_j = plt.figure(0)
 
         self.slice_dataset(self._training_x.shape[0], self.p_test, self.p_val, self.p_train)
+        plt.figure(1)
+        f, axarr = plt.subplots(5,5)
+        plotRow = 0
+        plotCol = 0
+        axarr[plotRow, plotCol].plot(self.estimate(), 'r')
+        axarr[plotRow, plotCol].plot(self._dataLabel, 'y')
+        axarr[plotRow, plotCol].set_title(str(plotRow*4 +plotCol))
+        plotCol += 1
 
         #Training
         num_batches = self.n_train//self.n_batch
@@ -141,15 +157,26 @@ class GradientDescent:
                     stop = self.n_train
                 idx_train_batch = self._idx_train[start:stop]
 
-                delta_w = self.grad_j(self._training_x[idx_train_batch], self._training_y[idx_train_batch])
-                self._theta += self.fixed_alpha(delta_w)
+                delta_w, delta_b= self.grad_j(self._training_x[idx_train_batch], self._training_y[idx_train_batch])
+                #self._theta += self.fixed_alpha(delta_w)
+                #self._b     += self.fixed_alpha(delta_b)
+                delta_w, delta_b = self.standard_momentum(self.alpha, delta_w, delta_b)
+                self._theta += delta_w
+                self._b += delta_b
 
             self._j_train[epoch] = self.get_mean_err(self._training_x[self._idx_train], self._training_y[self._idx_train])
             self._j_test[epoch] = self.get_mean_err(self._training_x[self._idx_test], self._training_y[self._idx_test])
             self._j_val[epoch] = self.get_mean_err(self._training_x[self._idx_val], self._training_y[self._idx_val])
+            axarr[plotRow, plotCol].plot(self.estimate(), 'r')
+            axarr[plotRow, plotCol].plot(self._dataLabel, 'y')
+            axarr[plotRow, plotCol].set_title(str(plotRow*4 +plotCol))
+            if plotCol == 4:
+                plotCol = 0
+                plotRow += 1
+            else:
+                plotCol += 1
 
-
-
+        #plt.show()
         #
         #
         #
@@ -160,8 +187,11 @@ class GradientDescent:
         #
         #
         #
-
+        plt.figure(2)
+        plt.subplot(211)
         self.plot_err()
+        plt.subplot(212)
+        self.print_estimation()
         plt.show()
 
 
@@ -189,6 +219,7 @@ class GradientDescent:
         assert (self.n_test + self.n_val + self.n_train) == n_total
         assert (self.n_test > 0 and self.n_val > 0 and self.n_train > 0)
 
+
         self._idx_val = np.array(range(0, self.n_val))
         self._idx_test = np.array(range(self.n_val, self.n_val+self.n_test))
         self._idx_train = np.array(range(self.n_val+self.n_test, n_total))
@@ -199,7 +230,7 @@ class GradientDescent:
 
 
     def fixed_alpha(self, grad_j):
-        return self.alpha * grad_j
+        return -self.alpha * grad_j
 
     def rmsprop(self, grad_j):
         return np.nan
@@ -207,8 +238,10 @@ class GradientDescent:
     def adam(self, grad_j):
         return np.nan
 
-    def standard_momentum(self, alpha, grad_j):
-        return np.nan
+    def standard_momentum(self, alpha, grad_j, grad_j_b):
+        self.momentum_v = self.momentum_rho*self.momentum_v - alpha*grad_j
+        self.momentum_v_b = self.momentum_rho*self.momentum_v_b - alpha*grad_j_b
+        return self.momentum_v, self.momentum_v_b
 
     def adam_momentum(self, alpha, grad_j):
         return np.nan
@@ -220,6 +253,11 @@ class GradientDescent:
         plt.plot(self._j_test, 'b')
         plt.plot(self._j_train, 'r')
         plt.plot(self._j_val, 'g')
+        train_patch = mpatches.Patch(color='red', label='Training data')
+        test_patch = mpatches.Patch(color='blue', label='Testing data')
+        val_patch = mpatches.Patch(color='green', label='Validation data')
+        plt.legend(handels=[train_patch, test_patch, val_patch])
+
         return np.nan
     def get_mean_err(self, x, y):
         (rows, columns) = x.shape
@@ -227,4 +265,17 @@ class GradientDescent:
         err = 0
         for itr in range(rows):
             err += self.j(x[itr], y[itr])
-        return double(err)/rows
+        return float(err)/rows
+    def estimate(self):
+        num = self._dataIn.shape[0]
+        y_hat = np.zeros(num)
+        for i in range(num):
+            y_hat[i] = self.eval(self._dataIn[i])[:1]
+        return y_hat
+
+
+    def print_estimation(self):
+        y_hat = self.estimate()
+        plt.plot(y_hat, 'y')
+        plt.plot(self._dataLabel, 'r')
+
